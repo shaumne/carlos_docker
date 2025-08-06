@@ -1,0 +1,40 @@
+# Dockerfile for yf.py (Signal Generator)
+FROM python:3.11-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application files
+COPY yf.py .
+COPY signal_bus.py .
+COPY signal_producer.py .
+COPY yf_integration.py .
+
+# Create logs directory
+RUN mkdir -p logs
+
+# Create non-root user for security
+RUN groupadd -r crypto && useradd -r -g crypto crypto
+RUN chown -R crypto:crypto /app
+USER crypto
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD python -c "import signal_producer; producer = signal_producer.SignalProducer(); print('OK' if producer.is_healthy() else exit(1))"
+
+# Run the application
+CMD ["python", "yf_integration.py"]

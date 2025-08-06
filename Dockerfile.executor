@@ -1,0 +1,40 @@
+# Dockerfile for trade_executor.py (Signal Consumer)
+FROM python:3.11-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application files
+COPY trade_executor.py .
+COPY signal_bus.py .
+COPY signal_consumer.py .
+COPY executor_integration.py .
+
+# Create necessary directories
+RUN mkdir -p logs local_data
+
+# Create non-root user for security
+RUN groupadd -r crypto && useradd -r -g crypto crypto
+RUN chown -R crypto:crypto /app
+USER crypto
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python -c "import signal_consumer; consumer = signal_consumer.SignalConsumer(); print('OK' if consumer.is_healthy() else exit(1))"
+
+# Run the application
+CMD ["python", "executor_integration.py"]

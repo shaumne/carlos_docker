@@ -1,0 +1,138 @@
+version: '3.8'
+
+services:
+  # Redis server for signal communication
+  redis:
+    image: redis:7-alpine
+    container_name: crypto_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - crypto_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Signal generator (yf.py)
+  signal_generator:
+    build:
+      context: .
+      dockerfile: Dockerfile.yf
+    container_name: crypto_signal_generator
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - LOG_LEVEL=INFO
+      - PYTHONUNBUFFERED=1
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - ./credentials.json:/app/credentials.json:ro
+    networks:
+      - crypto_network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import redis; r=redis.Redis(host='redis'); r.ping()"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # Trade executor (trade_executor.py)
+  trade_executor:
+    build:
+      context: .
+      dockerfile: Dockerfile.executor
+    container_name: crypto_trade_executor
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      signal_generator:
+        condition: service_healthy
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - LOG_LEVEL=INFO
+      - PYTHONUNBUFFERED=1
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - ./local_data:/app/local_data
+      - ./credentials.json:/app/credentials.json:ro
+    networks:
+      - crypto_network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import redis; r=redis.Redis(host='redis'); r.ping()"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # Redis monitoring (optional)
+  redis_exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: crypto_redis_exporter
+    restart: unless-stopped
+    depends_on:
+      - redis
+    environment:
+      - REDIS_ADDR=redis://redis:6379
+    ports:
+      - "9121:9121"
+    networks:
+      - crypto_network
+    profiles:
+      - monitoring
+
+  # Log aggregator (optional)
+  log_aggregator:
+    image: fluent/fluent-bit:latest
+    container_name: crypto_log_aggregator
+    restart: unless-stopped
+    volumes:
+      - ./logs:/var/log/app:ro
+      - ./fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+    networks:
+      - crypto_network
+    profiles:
+      - monitoring
+
+volumes:
+  redis_data:
+    driver: local
+
+networks:
+  crypto_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
