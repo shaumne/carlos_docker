@@ -99,40 +99,60 @@ install_dependencies() {
     
     case "$OS_TYPE" in
         "ubuntu")
-            # Update package list
-            sudo apt-get update
+            # Update package list with error handling
+            sudo apt-get update --fix-missing || {
+                warn "APT update had some issues but continuing..."
+                # Disable problematic command-not-found database update
+                sudo mv /usr/lib/cnf-update-db /usr/lib/cnf-update-db.bak 2>/dev/null || true
+                sudo apt-get update
+            }
             
             # Install basic tools
             sudo apt-get install -y curl wget git unzip software-properties-common apt-transport-https ca-certificates gnupg lsb-release
             
-            # Install Python 3.11+ if not present
+            # Install Python 3.11+ if not present (minimal installation)
             if ! command -v python3.11 &> /dev/null; then
                 log "Installing Python 3.11..."
                 sudo add-apt-repository ppa:deadsnakes/ppa -y
-                sudo apt-get update
-                sudo apt-get install -y python3.11 python3.11-pip python3.11-venv python3.11-dev
+                sudo apt-get update || true
+                sudo apt-get install -y python3.11 python3.11-venv python3.11-dev python3.11-distutils
                 
-                # Create python3 symlink
-                sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+                # Don't mess with system Python, we'll use virtual environment
+                log "Python 3.11 installed for virtual environment use"
             fi
             
-            # Install pip for Python 3.11
-            if ! command -v pip3 &> /dev/null; then
-                log "Installing pip..."
-                curl https://bootstrap.pypa.io/get-pip.py | python3
+            # Install pip for Python 3.11 (minimal approach)
+            if ! python3.11 -m pip --version &> /dev/null; then
+                log "Installing pip for Python 3.11..."
+                curl -s https://bootstrap.pypa.io/get-pip.py | python3.11
             fi
             
             # Install Docker
             if ! command -v docker &> /dev/null; then
                 log "Installing Docker..."
+                
+                # Clean up any previous Docker GPG keys and repositories
+                sudo rm -f /usr/share/keyrings/docker-archive-keyring.gpg 2>/dev/null || true
+                sudo rm -f /etc/apt/sources.list.d/docker.list 2>/dev/null || true
+                
+                # Add Docker GPG key and repository
                 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
                 echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-                sudo apt-get update
-                sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+                
+                # Update and install Docker with error handling
+                sudo apt-get update || true
+                sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin || {
+                    warn "Docker installation failed, trying alternative method..."
+                    sudo apt-get install -y docker.io docker-compose
+                }
                 
                 # Add user to docker group
                 sudo usermod -aG docker $USER
                 log "User added to docker group - you may need to log out and back in"
+                
+                # Start Docker service
+                sudo systemctl enable docker
+                sudo systemctl start docker
             fi
             
             # Install Docker Compose
@@ -198,40 +218,45 @@ setup_project_structure() {
 
 # Create Python virtual environment and install packages
 setup_python_environment() {
-    log "Setting up Python environment..."
+    log "Setting up isolated Python environment..."
     
-    # Determine Python command
-    PYTHON_CMD="python3"
-    if command -v python3.11 &> /dev/null; then
-        PYTHON_CMD="python3.11"
-    elif command -v python3 &> /dev/null; then
-        PYTHON_CMD="python3"
-    elif command -v python &> /dev/null; then
-        PYTHON_CMD="python"
-    else
-        error "No Python installation found"
+    # Use Python 3.11 specifically for clean environment
+    PYTHON_CMD="python3.11"
+    if ! command -v python3.11 &> /dev/null; then
+        error "Python 3.11 not found. Please run install_dependencies first."
         exit 1
     fi
     
     log "Using Python: $($PYTHON_CMD --version)"
     
-    # Create virtual environment
-    if [ ! -d "venv" ]; then
-        log "Creating Python virtual environment..."
-        $PYTHON_CMD -m venv venv
+    # Remove existing venv if it exists to ensure clean install
+    if [ -d "venv" ]; then
+        log "Removing existing virtual environment for clean install..."
+        rm -rf venv
     fi
     
-    # Activate virtual environment
-    source venv/bin/activate 2>/dev/null || source venv/Scripts/activate 2>/dev/null
+    # Create fresh virtual environment
+    log "Creating fresh Python 3.11 virtual environment..."
+    $PYTHON_CMD -m venv venv --clear
     
-    # Upgrade pip
-    pip install --upgrade pip
+    # Activate virtual environment
+    log "Activating virtual environment..."
+    source venv/bin/activate
+    
+    # Verify we're in the virtual environment
+    log "Virtual environment Python: $(python --version)"
+    log "Virtual environment pip: $(pip --version)"
+    
+    # Upgrade pip in virtual environment
+    log "Upgrading pip in virtual environment..."
+    python -m pip install --upgrade pip
     
     # Install Python packages
-    log "Installing Python packages..."
+    log "Installing Python packages in isolated environment..."
     
     # Create requirements.txt if it doesn't exist
     if [ ! -f "requirements.txt" ]; then
+        log "Creating requirements.txt..."
         cat > requirements.txt << EOF
 # Redis for signal communication
 redis==5.0.1
@@ -257,9 +282,18 @@ psutil==5.9.6
 EOF
     fi
     
-    pip install -r requirements.txt
+    # Install packages with verbose output
+    log "Installing packages (this may take a few minutes)..."
+    python -m pip install -r requirements.txt --verbose
     
-    success "Python environment setup completed"
+    # Verify installation
+    log "Verifying critical packages..."
+    python -c "import redis, pandas, ccxt, gspread; print('✓ All critical packages imported successfully')" || {
+        error "Package installation verification failed"
+        exit 1
+    }
+    
+    success "Isolated Python environment setup completed successfully"
 }
 
 # Setup configuration files
@@ -502,13 +536,18 @@ test_system() {
     fi
     
     # Test Python environment
-    info "Testing Python environment..."
-    source venv/bin/activate 2>/dev/null || source venv/Scripts/activate 2>/dev/null
-    
-    if python -c "import redis, pandas, ccxt, gspread; print('All imports successful')" 2>/dev/null; then
-        success "✓ Python environment working"
+    info "Testing isolated Python environment..."
+    if [ -d "venv" ]; then
+        source venv/bin/activate
+        
+        if python -c "import redis, pandas, ccxt, gspread; print('All imports successful')" 2>/dev/null; then
+            success "✓ Isolated Python environment working"
+        else
+            error "✗ Python environment issues detected"
+            return 1
+        fi
     else
-        error "✗ Python environment issues detected"
+        warn "Virtual environment not found - please run setup first"
         return 1
     fi
     
