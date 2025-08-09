@@ -24,12 +24,13 @@ COPY signal_bus.py .
 COPY signal_consumer.py .
 COPY executor_integration.py .
 
-# Create necessary directories
-RUN mkdir -p logs local_data
-
 # Create non-root user for security
 RUN groupadd -r crypto && useradd -r -g crypto crypto
-RUN chown -R crypto:crypto /app
+
+# Create necessary directories with proper permissions
+RUN mkdir -p logs local_data && chown -R crypto:crypto /app
+
+# Switch to non-root user
 USER crypto
 
 # Health check

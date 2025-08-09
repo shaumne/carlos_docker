@@ -24,12 +24,13 @@ COPY signal_bus.py .
 COPY signal_producer.py .
 COPY yf_integration.py .
 
-# Create logs directory
-RUN mkdir -p logs
-
 # Create non-root user for security
 RUN groupadd -r crypto && useradd -r -g crypto crypto
-RUN chown -R crypto:crypto /app
+
+# Create logs directory with proper permissions
+RUN mkdir -p logs && chown -R crypto:crypto /app
+
+# Switch to non-root user
 USER crypto
 
 # Health check

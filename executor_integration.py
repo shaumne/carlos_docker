@@ -59,57 +59,33 @@ logging.basicConfig(
 logger = logging.getLogger("executor_integration")
 
 
-class EnhancedTradeManager(GoogleSheetTradeManager):
-    """
-    Enhanced Trade Manager with Redis integration
-    
-    This class extends the original GoogleSheetTradeManager to use Redis for signal consumption
-    while maintaining backward compatibility with Google Sheets and all existing trading logic.
-    """
-    
+class EnhancedTradeManager:
+    """Composition-based wrapper preserving original trade manager internals"""
+
     def __init__(self):
-        """Initialize the enhanced trade manager"""
-        logger.info("Initializing Enhanced Trade Manager with Redis integration")
-        
-        # Check if Redis should be used
+        logger.info("Initializing Enhanced Trade Manager with Redis integration (composition)")
+
+        # Always construct the original manager so internals are ready
+        self.manager = GoogleSheetTradeManager()
+
         enable_redis = os.getenv("ENABLE_REDIS", "true").lower() == "true"
         enable_sheets_fallback = os.getenv("ENABLE_SHEETS_FALLBACK", "true").lower() == "true"
-        
+
+        self.signal_adapter = None
+        self.redis_enabled = False
         if enable_redis:
             try:
-                # Initialize original trade manager for fallback
-                original_manager = None
-                if enable_sheets_fallback:
-                    try:
-                        # Call parent constructor for Google Sheets functionality
-                        super().__init__()
-                        original_manager = self
-                        logger.info("Google Sheets fallback initialized")
-                    except Exception as e:
-                        logger.warning(f"Google Sheets fallback failed to initialize: {e}")
-                
-                # Create Redis-based adapter
-                self.signal_adapter = TradeExecutorAdapter(original_manager)
+                _ = SignalBusConfig()  # validate env
+                original_manager = self.manager if enable_sheets_fallback else None
+                self.signal_adapter = TradeExecutorAdapter(original_trade_manager=original_manager)
                 self.redis_enabled = True
+                # Monkey-patch get_trade_signals to adapter version
+                self.manager.get_trade_signals = self.signal_adapter.get_trade_signals  # type: ignore
                 logger.info("Redis integration initialized successfully")
-                
             except Exception as e:
                 logger.error(f"Redis integration failed: {e}")
-                if enable_sheets_fallback:
-                    logger.info("Falling back to Google Sheets only")
-                    super().__init__()
-                    self.signal_adapter = None
-                    self.redis_enabled = False
-                else:
-                    raise RuntimeError(f"Redis required but failed to initialize: {e}")
-        else:
-            # Use Google Sheets only
-            logger.info("Using Google Sheets only (Redis disabled)")
-            super().__init__()
-            self.signal_adapter = None
-            self.redis_enabled = False
-        
-        # Additional initialization
+                logger.info("Falling back to Google Sheets only")
+
         self.stats = {
             'signals_processed': 0,
             'trades_executed': 0,
@@ -164,7 +140,7 @@ class EnhancedTradeManager(GoogleSheetTradeManager):
             return self.signal_adapter.wait_for_new_signals(timeout)
         else:
             # For Google Sheets, just return current signals
-            return self.get_trade_signals()
+            return self.manager.get_trade_signals()
     
     def run(self):
         """Enhanced run method with Redis signal consumption"""
@@ -176,7 +152,7 @@ class EnhancedTradeManager(GoogleSheetTradeManager):
         startup_message = "🚀 *Enhanced Trade Executor Started*\n\n"
         startup_message += f"• Redis integration: {'Enabled' if self.redis_enabled else 'Disabled'}\n"
         startup_message += f"• Signal source: {'Redis + Sheets fallback' if self.redis_enabled else 'Google Sheets only'}\n"
-        startup_message += f"• Check interval: {self.check_interval}s\n"
+        startup_message += f"• Check interval: {self.manager.check_interval}s\n"
         startup_message += f"• Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         
         self.telegram.send_message(startup_message)
@@ -195,7 +171,7 @@ class EnhancedTradeManager(GoogleSheetTradeManager):
                     signals = self.wait_for_signals(timeout=float(self.check_interval))
                 else:
                     # Use traditional Google Sheets polling
-                    signals = self.get_trade_signals()
+                    signals = self.manager.get_trade_signals()
                 
                 # Process all signals
                 for signal in signals:
@@ -213,14 +189,14 @@ class EnhancedTradeManager(GoogleSheetTradeManager):
                                 continue
                             
                             # Execute the buy trade
-                            success = self.execute_trade(signal)
+                            success = self.manager.execute_trade(signal)
                             if success:
                                 self.stats['trades_executed'] += 1
                         
                         # For SELL signals
                         elif action == "SELL":
                             # Execute the sell trade
-                            success = self.execute_trade(signal)
+                            success = self.manager.execute_trade(signal)
                             if success:
                                 self.stats['trades_executed'] += 1
                         
@@ -236,8 +212,8 @@ class EnhancedTradeManager(GoogleSheetTradeManager):
                 current_time = time.time()
                 if current_time - last_order_check_time >= order_check_interval:
                     try:
-                        self.check_completed_orders()
-                        self.check_recent_trades()
+                        self.manager.check_completed_orders()
+                        self.manager.check_recent_trades()
                         last_order_check_time = current_time
                     except Exception as e:
                         logger.error(f"Error checking orders: {e}")
@@ -245,26 +221,26 @@ class EnhancedTradeManager(GoogleSheetTradeManager):
                 # Process batch updates to Google Sheets
                 try:
                     # Get pending operations from local manager
-                    pending_counts = self.local_manager.get_pending_count()
+                    pending_counts = self.manager.local_manager.get_pending_count()
                     total_pending = sum(pending_counts.values())
                     
                     if total_pending > 0:
                         logger.info(f"Processing {total_pending} pending operations")
                         
                         # Get batch for processing
-                        batch = self.local_manager.get_batch_for_processing()
+                        batch = self.manager.local_manager.get_batch_for_processing()
                         
                         # Process cell updates
                         if batch['updates']:
-                            self._process_cell_updates_batch(batch['updates'])
+                            self.manager._process_cell_updates_batch(batch['updates'])
                         
                         # Process archive operations
                         if batch['archives']:
-                            self._process_archive_batch(batch['archives'])
+                            self.manager._process_archive_batch(batch['archives'])
                         
                         # Process clear operations
                         if batch['clears']:
-                            self._process_clear_batch(batch['clears'])
+                            self.manager._process_clear_batch(batch['clears'])
                 
                 except Exception as e:
                     logger.error(f"Error processing batch updates: {e}")

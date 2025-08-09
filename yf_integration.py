@@ -59,109 +59,59 @@ logging.basicConfig(
 logger = logging.getLogger("yf_integration")
 
 
-class EnhancedTradingBot(TradingBot):
-    """
-    Enhanced Trading Bot with Redis integration
-    
-    This class extends the original TradingBot to use Redis for signal delivery
-    while maintaining backward compatibility with Google Sheets.
-    """
-    
+class EnhancedTradingBot:
+    """Composition-based wrapper that preserves TradingBot internals"""
+
     def __init__(self):
-        """Initialize the enhanced trading bot"""
-        logger.info("Initializing Enhanced Trading Bot with Redis integration")
-        
-        # Check if Redis should be used
+        logger.info("Initializing Enhanced Trading Bot with Redis integration (composition)")
+
+        # Create original bot first so its internals are fully initialized
+        self.bot = TradingBot()
+
         enable_redis = os.getenv("ENABLE_REDIS", "true").lower() == "true"
         enable_sheets_fallback = os.getenv("ENABLE_SHEETS_FALLBACK", "true").lower() == "true"
-        
+
         if enable_redis:
             try:
-                # Create Redis configuration
-                config = SignalBusConfig()
-                
-                # Initialize original sheets integration for fallback
+                _ = SignalBusConfig()  # validate env
                 original_sheets = None
                 if enable_sheets_fallback:
                     try:
-                        original_sheets = GoogleSheetIntegration()
+                        original_sheets = self.bot.sheets if hasattr(self.bot, 'sheets') else GoogleSheetIntegration()
                         logger.info("Google Sheets fallback initialized")
                     except Exception as e:
                         logger.warning(f"Google Sheets fallback failed to initialize: {e}")
-                
-                # Create Redis-based adapter
-                self.sheets = YfIntegrationAdapter(original_sheets)
+
+                # Swap sheets with adapter
+                self.bot.sheets = YfIntegrationAdapter(original_sheets)
                 logger.info("Redis integration initialized successfully")
-                
             except Exception as e:
                 logger.error(f"Redis integration failed: {e}")
                 if enable_sheets_fallback:
                     logger.info("Falling back to Google Sheets only")
-                    self.sheets = GoogleSheetIntegration()
                 else:
                     raise RuntimeError(f"Redis required but failed to initialize: {e}")
         else:
-            # Use Google Sheets only
             logger.info("Using Google Sheets only (Redis disabled)")
-            self.sheets = GoogleSheetIntegration()
-        
-        # Initialize other components from parent class
-        from yf import TradingViewDataProvider
-        self.data_provider = TradingViewDataProvider()
-        
-        # Read configuration
-        self.update_interval = int(os.getenv("TRADE_CHECK_INTERVAL", "5"))
-        self.batch_size = int(os.getenv("BATCH_SIZE", "5"))
-        self.telegram = TelegramNotifier()
-        
-        # Initialize tracking variables
-        self.analyzed_pairs = {}
-        self._previous_actions = {}
-        self._last_update_times = {}
-        self.price_update_interval = 15
-        self._failed_updates = {}
-        self._retry_delay = 60
-        self._force_sheet_refresh_interval = 600
-        self._last_force_refresh = time.time()
-        
-        logger.info("Enhanced Trading Bot initialized successfully")
-    
+
     def run(self):
-        """Run the enhanced trading bot with Redis integration"""
-        logger.info("Starting Enhanced Trading Bot")
-        logger.info(f"Redis integration: {'Yes' if hasattr(self.sheets, 'producer') else 'No'}")
-        logger.info(f"Update interval: {self.update_interval} seconds")
-        
+        # Startup info
         try:
-            # Send startup notification
-            self.telegram.send_startup_message()
-            
-            # Check if we're using Redis integration
-            if hasattr(self.sheets, 'producer'):
-                logger.info("Using Redis-based signal delivery")
-                
-                # Send startup heartbeat
-                try:
-                    self.sheets.producer.send_heartbeat()
-                    logger.info("Startup heartbeat sent")
-                except Exception as e:
-                    logger.warning(f"Failed to send startup heartbeat: {e}")
-            
-            # Use the original run method with enhanced sheets integration
-            super().run()
-            
-        except KeyboardInterrupt:
-            logger.info("Trading bot stopped by user")
-            self.telegram.send_message("⚠️ *YF Bot Stopped*\n\nSignal generator was manually stopped.")
-        except Exception as e:
-            logger.critical(f"Fatal error in enhanced trading bot: {e}")
-            self.telegram.send_message(f"🚨 *YF Bot Error*\n\nFatal error: {str(e)}")
-            raise
-        finally:
-            # Clean shutdown
-            if hasattr(self.sheets, 'stop'):
-                self.sheets.stop()
-            logger.info("Enhanced Trading Bot shutdown complete")
+            if hasattr(self.bot, 'telegram'):
+                self.bot.telegram.send_startup_message()
+        except Exception:
+            pass
+
+        # Heartbeat if Redis
+        try:
+            sheets = getattr(self.bot, 'sheets', None)
+            if sheets and hasattr(sheets, 'producer'):
+                sheets.producer.send_heartbeat()
+        except Exception:
+            pass
+
+        # Delegate to original bot
+        self.bot.run()
 
 
 def check_environment():
