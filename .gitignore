@@ -1,0 +1,5 @@
+aws_key
+aws_key.pub
+*.log
+.env
+credentials.json
