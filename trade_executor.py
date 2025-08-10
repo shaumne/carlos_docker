@@ -22,7 +22,6 @@ import random
 import http.server
 import socketserver
 import types
-from gspread.models import Cell
 from collections import defaultdict
 import uuid
 
@@ -3321,19 +3320,24 @@ class GoogleSheetTradeManager:
             return False
     
     def _process_cell_updates_batch(self, updates):
-        """Process a batch of cell updates using single batchUpdate call per worksheet."""
+        """Process a batch of cell updates using batchUpdate with A1 ranges."""
         try:
             headers = self.worksheet.row_values(1)
-            cells: list[Cell] = []
+            batch_requests = []
             for upd in updates:
-                col_idx = headers.index(upd['column']) + 1
-                cells.append(Cell(row=upd['row_index'], col=col_idx, value=upd['value']))
+                try:
+                    col_idx = headers.index(upd['column']) + 1
+                except ValueError:
+                    logger.error(f"Column not found in headers: {upd['column']}")
+                    continue
+                a1 = f"{self._column_index_to_letter(col_idx)}{upd['row_index']}"
+                batch_requests.append({'range': a1, 'values': [[upd['value']]]})
 
-            if not cells:
+            if not batch_requests:
                 return True
 
             def do_update():
-                return self.worksheet.update_cells(cells, value_input_option='USER_ENTERED')
+                return self.worksheet.batch_update(batch_requests, value_input_option='USER_ENTERED')
 
             self._run_with_backoff(do_update, _max_attempts=5)
             return True
@@ -3548,20 +3552,25 @@ class GoogleSheetTradeManager:
             return False
     
     def _process_clear_batch(self, clears):
-        """Process a batch of clear operations in one batchUpdate."""
+        """Process a batch of clear operations using batchUpdate with A1 ranges."""
         try:
             headers = self.worksheet.row_values(1)
-            cells: list[Cell] = []
+            batch_requests = []
             for clear in clears:
                 for column in set(clear['columns']):
-                    col_idx = headers.index(column) + 1
-                    cells.append(Cell(row=clear['row_index'], col=col_idx, value=""))
+                    try:
+                        col_idx = headers.index(column) + 1
+                    except ValueError:
+                        logger.error(f"Column not found in headers: {column}")
+                        continue
+                    a1 = f"{self._column_index_to_letter(col_idx)}{clear['row_index']}"
+                    batch_requests.append({'range': a1, 'values': [[""]]})
 
-            if not cells:
+            if not batch_requests:
                 return True
 
             def do_update():
-                return self.worksheet.update_cells(cells, value_input_option='USER_ENTERED')
+                return self.worksheet.batch_update(batch_requests, value_input_option='USER_ENTERED')
 
             self._run_with_backoff(do_update, _max_attempts=5)
             return True
