@@ -49,7 +49,15 @@ def migrate(python_bin: Path):
 
 def start_services(python_bin: Path):
     env = os.environ.copy()
-    # Delegate .env loading to the apps (they already call load_dotenv)
+    # Clean env vars that might have comments from .env parsing
+    for key in list(env.keys()):
+        if key.startswith(('TRADE_', 'GOOGLE_', 'CRYPTO_', 'TELEGRAM_', 'HEALTH_')):
+            val = env[key]
+            if '#' in val:
+                # Remove comment part
+                clean_val = val.split('#')[0].strip()
+                env[key] = clean_val
+                print(f"[env] Cleaned {key}: '{val}' -> '{clean_val}'", flush=True)
 
     logs_dir = ROOT / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)

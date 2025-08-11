@@ -39,6 +39,13 @@ logger = logging.getLogger("sui_trader_sheets")
 # Load environment variables
 load_dotenv()
 
+# Clean env vars that might have comments
+def clean_env_value(key: str, default_val: str = "") -> str:
+    val = os.getenv(key, default_val)
+    if '#' in val:
+        val = val.split('#')[0].strip()
+    return val
+
 from local_db_queue import LocalDbQueue
 
 
@@ -215,7 +222,7 @@ class CryptoExchangeAPI:
         self.trading_base_url = "https://api.crypto.com/exchange/v1/"
         # Account URL for get-account-summary (from get_account_summary.py)
         self.account_base_url = "https://api.crypto.com/v2/"
-        self.trade_amount = float(os.getenv("TRADE_AMOUNT", "10"))  # Default trade amount in USDT
+        self.trade_amount = float(clean_env_value("TRADE_AMOUNT", "10"))  # Default trade amount in USDT
         self.min_balance_required = self.trade_amount * 1.05  # 5% buffer for fees
         
         if not self.api_key or not self.api_secret:
@@ -898,11 +905,11 @@ class GoogleSheetTradeManager:
         self.archive_worksheet_name = os.getenv("ARCHIVE_WORKSHEET_NAME", "Archive")
         self.exchange_api = CryptoExchangeAPI()
         self.telegram = TelegramNotifier()
-        self.check_interval = int(os.getenv("TRADE_CHECK_INTERVAL", "5"))  # Default 5 seconds
-        self.batch_size = int(os.getenv("BATCH_SIZE", "5"))  # Process in batches
+        self.check_interval = int(clean_env_value("TRADE_CHECK_INTERVAL", "5"))  # Default 5 seconds
+        self.batch_size = int(clean_env_value("BATCH_SIZE", "5"))  # Process in batches
         self.active_positions = {}  # Track active positions
-        self.atr_period = int(os.getenv("ATR_PERIOD", "14"))  # Default ATR period
-        self.atr_multiplier = float(os.getenv("ATR_MULTIPLIER", "2.0"))  # Default ATR multiplier
+        self.atr_period = int(clean_env_value("ATR_PERIOD", "14"))  # Default ATR period
+        self.atr_multiplier = float(clean_env_value("ATR_MULTIPLIER", "2.0"))  # Default ATR multiplier
         self.last_tp_sl_revision = 0  # Last revision time (timestamp)
         self.tp_sl_revision_interval = 600  # 10 minutes (seconds)
         
@@ -1583,7 +1590,7 @@ class GoogleSheetTradeManager:
         return letters
 
     def _start_health_server(self):
-        port = int(os.getenv("HEALTH_PORT", "8080"))
+        port = int(clean_env_value("HEALTH_PORT", "8080"))
         manager = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -2493,12 +2500,23 @@ class GoogleSheetTradeManager:
                 for signal in signals:
                     symbol = signal['symbol']
                     action = signal['action']
+                    original_symbol = signal['original_symbol']
                     
                     # For BUY signals
                     if action == "BUY":
-                        # Skip if already have an active position
+                        # Skip if already have an active position for this coin
                         if symbol in self.active_positions:
-                            logger.debug(f"Skipping BUY for {symbol} - already have an active position")
+                            logger.info(f"Skipping BUY signal for {original_symbol} ({symbol}) - already have an active position")
+                            continue
+                        
+                        # Also check if we have any active position for the same base coin
+                        base_coin = symbol.split('_')[0]
+                        has_active_for_coin = any(
+                            pos_symbol.split('_')[0] == base_coin 
+                            for pos_symbol in self.active_positions.keys()
+                        )
+                        if has_active_for_coin:
+                            logger.info(f"Skipping BUY signal for {original_symbol} - already have active position for {base_coin}")
                             continue
                         
                         # Execute the buy trade

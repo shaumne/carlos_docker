@@ -32,6 +32,13 @@ logger = logging.getLogger("trading_bot")
 # Load environment variables
 load_dotenv()
 
+# Clean env vars that might have comments
+def clean_env_value(key: str, default_val: str = "") -> str:
+    val = os.getenv(key, default_val)
+    if '#' in val:
+        val = val.split('#')[0].strip()
+    return val
+
 class TradingViewDataProvider:
     """Class to handle TradingView data retrieval"""
     
@@ -64,8 +71,8 @@ class TradingViewDataProvider:
         self.interval = interval_map.get(interval_str, "15m")
         
         # ATR için parametre değerleri
-        self.atr_period = int(os.getenv("ATR_PERIOD", "14"))  # Default ATR period
-        self.atr_multiplier = float(os.getenv("ATR_MULTIPLIER", "2.0"))  # Default ATR multiplier
+        self.atr_period = int(clean_env_value("ATR_PERIOD", "14"))  # Default ATR period
+        self.atr_multiplier = float(clean_env_value("ATR_MULTIPLIER", "2.0"))  # Default ATR multiplier
         
         # ATR verilerini saklamak için cache oluştur
         self.atr_cache = {}  # {symbol: {'atr': value, 'timestamp': last_update_time}}

@@ -41,17 +41,18 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=${SVC_USER}
+Group=${SVC_USER}
 WorkingDirectory=${REPO_DIR}
 # Load environment variables if .env exists
 EnvironmentFile=-${REPO_DIR}/.env
-ExecStart=${PYTHON3_BIN} ${REPO_DIR}/scripts/run_all.py
+ExecStart=/bin/bash -c "cd ${REPO_DIR} && source .venv/bin/activate && exec python scripts/run_all.py"
 Restart=always
 RestartSec=5
 KillSignal=SIGINT
 TimeoutStopSec=30
 NoNewPrivileges=true
-ProtectSystem=full
-ProtectHome=true
+ProtectSystem=strict
+ProtectHome=false
 LimitNOFILE=65536
 
 [Install]
