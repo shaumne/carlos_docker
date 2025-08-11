@@ -178,8 +178,9 @@ class TelegramNotifier:
             logger.info("Skipping Telegram notification for rate limit/API error message")
             return True  # Return True for filtered messages
         
-        # Filter out blocked signal messages
-        if any(blocked_term in message.lower() for blocked_term in ['signal blocked', 'blocked', 'open position exists', 'reason:']):
+        # Filter out blocked signal messages (but allow important messages)
+        if (any(blocked_term in message.lower() for blocked_term in ['signal blocked', 'buy signal blocked', 'open position exists']) 
+            and not any(important_term in message.lower() for important_term in ['bot started', 'order executed', 'buy order', 'sell order'])):
             logger.debug(f"Filtered blocked signal message: {message[:50]}...")
             return True  # Return True to prevent retries
             

@@ -1372,8 +1372,9 @@ class TelegramNotifier:
             logger.warning("Telegram not configured, skipping message")
             return False
         
-        # Filter out blocked signal messages
-        if any(blocked_term in message.lower() for blocked_term in ['signal blocked', 'blocked', 'open position exists', 'reason:']):
+        # Filter out blocked signal messages (but allow startup messages)
+        if (any(blocked_term in message.lower() for blocked_term in ['signal blocked', 'buy signal blocked', 'open position exists']) 
+            and 'crypto trading bot started' not in message.lower()):
             logger.debug(f"Filtered blocked signal message: {message[:50]}...")
             return True  # Return True to prevent retries
         
@@ -1385,13 +1386,17 @@ class TelegramNotifier:
     def clear_queue(self):
         """Clear all pending messages from the queue"""
         cleared_count = 0
-        while not self.message_queue.empty():
-            try:
-                self.message_queue.get_nowait()
-                cleared_count += 1
-            except:
-                break
-        logger.info(f"Cleared {cleared_count} pending Telegram messages from queue")
+        try:
+            while not self.message_queue.empty():
+                try:
+                    self.message_queue.get_nowait()
+                    cleared_count += 1
+                except Exception:
+                    break
+            if cleared_count > 0:
+                logger.info(f"🧹 Cleared {cleared_count} pending Telegram messages from queue")
+        except Exception as e:
+            logger.warning(f"Error clearing queue: {e}")
         return cleared_count
     
     def send_signal(self, data):
@@ -1460,7 +1465,10 @@ class TelegramNotifier:
         message += f"• Date/Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
         message += f"Bot is now actively running! Signals will be sent automatically."
         
-        return self.send_message(message)
+        logger.info("🚀 Sending startup message to Telegram")
+        result = self.send_message(message)
+        logger.info(f"📤 Startup message send result: {result}")
+        return result
 
     def send_daily_summary(self, analyzed_pairs):
         """Send a daily summary of all tracked coins"""
