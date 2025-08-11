@@ -1264,6 +1264,10 @@ class TelegramNotifier:
         # Start message sender thread if credentials are available
         if self.token and self.chat_id:
             logger.info(f"Initializing Telegram bot with token: {self.token[:4]}...{self.token[-4:]}")
+            
+            # Clear any pending messages from previous session
+            self.clear_queue()
+            
             self.message_sender_thread = threading.Thread(
                 target=self._message_sender_worker,
                 daemon=True  # Thread will exit when main program exits
@@ -1368,10 +1372,27 @@ class TelegramNotifier:
             logger.warning("Telegram not configured, skipping message")
             return False
         
+        # Filter out blocked signal messages
+        if any(blocked_term in message.lower() for blocked_term in ['signal blocked', 'blocked', 'open position exists', 'reason:']):
+            logger.debug(f"Filtered blocked signal message: {message[:50]}...")
+            return True  # Return True to prevent retries
+        
         # Add message to the queue
         self.message_queue.put({"text": message, "parse_mode": parse_mode})
         logger.debug(f"Message queued for Telegram: {message[:50]}...")
         return True
+    
+    def clear_queue(self):
+        """Clear all pending messages from the queue"""
+        cleared_count = 0
+        while not self.message_queue.empty():
+            try:
+                self.message_queue.get_nowait()
+                cleared_count += 1
+            except:
+                break
+        logger.info(f"Cleared {cleared_count} pending Telegram messages from queue")
+        return cleared_count
     
     def send_signal(self, data):
         """Format and send a trading signal message"""

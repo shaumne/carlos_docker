@@ -177,6 +177,11 @@ class TelegramNotifier:
         if any(keyword in message.lower() for keyword in ['rate limit', 'quota exceeded', 'api error', '429', 'too many requests']):
             logger.info("Skipping Telegram notification for rate limit/API error message")
             return True  # Return True for filtered messages
+        
+        # Filter out blocked signal messages
+        if any(blocked_term in message.lower() for blocked_term in ['signal blocked', 'blocked', 'open position exists', 'reason:']):
+            logger.debug(f"Filtered blocked signal message: {message[:50]}...")
+            return True  # Return True to prevent retries
             
         try:
             # Check if we have a running event loop
