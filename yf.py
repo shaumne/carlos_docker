@@ -1005,7 +1005,9 @@ class GoogleSheetIntegration:
             symbol = data.get("symbol", "")
             
             # First check if values actually changed to avoid unnecessary updates
-            if not self._values_changed(row_index, data):
+            values_changed = self._values_changed(row_index, data)
+            logger.debug(f"Values changed check for {symbol}: {values_changed}")
+            if not values_changed:
                 logger.info(f"No significant changes for {symbol}, skipping Google Sheets update")
                 return True  # Return true so the bot thinks update was successful
             
@@ -1039,7 +1041,12 @@ class GoogleSheetIntegration:
                 batch_requests.append({"range": a1, "values": [[value]]})
 
             def do_update():
-                return self.worksheet.batch_update(batch_requests, value_input_option='USER_ENTERED')
+                logger.info(f"💾 BATCH UPDATE for {symbol}: {len(batch_requests)} updates")
+                for req in batch_requests:
+                    logger.debug(f"  - {req['range']}: {req['values'][0][0]}")
+                result = self.worksheet.batch_update(batch_requests, value_input_option='USER_ENTERED')
+                logger.info(f"✅ Batch update completed for {symbol}")
+                return result
             self._run_with_backoff(do_update)
             
             # Update our cache with the new values

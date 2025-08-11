@@ -1390,6 +1390,12 @@ class GoogleSheetTradeManager:
                 if not is_active or not tradable:
                     logger.debug(f"Skipping {symbol}: not active ({is_active}) or not tradable ({tradable})")
                     continue
+                
+                # Log when we find a potential BUY signal
+                if buy_signal == 'BUY':
+                    logger.info(f"🎯 BUY SIGNAL DETECTED for {symbol} at row {idx+2}")
+                elif buy_signal in ['SELL', 'WAIT']:
+                    logger.debug(f"Signal state for {symbol}: {buy_signal}")
                     
                 # Format for API: append _USDT if not already in pair format
                 if '_' not in symbol and '/' not in symbol:
