@@ -1361,6 +1361,8 @@ class GoogleSheetTradeManager:
                 logger.error("No data found in the sheet")
                 return []
             
+            logger.info(f"📊 SCANNING SHEET: Found {len(all_records)} rows for trade signals")
+            
             # Find rows with actionable signals in 'Buy Signal' column
             trade_signals = []
             for idx, row in enumerate(all_records):
@@ -1573,7 +1575,9 @@ class GoogleSheetTradeManager:
                         'order_id': order_id
                     })
             
-            logger.info(f"Found {len(trade_signals)} trade signals")
+            logger.info(f"🎯 SIGNALS SUMMARY: Found {len(trade_signals)} trade signals to process")
+            for signal in trade_signals:
+                logger.info(f"  - {signal['symbol']}: {signal['action']} (row {signal.get('row_index', '?')})")
             return trade_signals
                 
         except Exception as e:
@@ -2510,9 +2514,11 @@ class GoogleSheetTradeManager:
                     
                     # For BUY signals
                     if action == "BUY":
+                        logger.info(f"💰 PROCESSING BUY SIGNAL for {original_symbol} ({symbol})")
+                        
                         # Skip if already have an active position for this coin
                         if symbol in self.active_positions:
-                            logger.info(f"Skipping BUY signal for {original_symbol} ({symbol}) - already have an active position")
+                            logger.info(f"⏭️ Skipping BUY signal for {original_symbol} ({symbol}) - already have an active position")
                             continue
                         
                         # Also check if we have any active position for the same base coin
@@ -2522,16 +2528,18 @@ class GoogleSheetTradeManager:
                             for pos_symbol in self.active_positions.keys()
                         )
                         if has_active_for_coin:
-                            logger.info(f"Skipping BUY signal for {original_symbol} - already have active position for {base_coin}")
+                            logger.info(f"⏭️ Skipping BUY signal for {original_symbol} - already have active position for {base_coin}")
                             continue
                         
                         # Execute the buy trade
+                        logger.info(f"🚀 EXECUTING BUY TRADE for {symbol}")
                         self.execute_trade(signal)
-                    
+                        
                     # For SELL signals
                     elif action == "SELL":
                         # Execute the sell trade
                         # No need to skip if no active position, as execute_trade will handle that
+                        logger.info(f"💸 EXECUTING SELL TRADE for {symbol}")
                         self.execute_trade(signal)
                     
                     # Small delay between trades

@@ -1590,17 +1590,8 @@ class TradingBot:
                     analysis["action"] = "WAIT"
                     analysis["buy_signal"] = False
                     
-                    # Telegram bildirimi gönderme (açık pozisyon nedeniyle)
-                    try:
-                        self.telegram.send_message(
-                            f"⚠️ *BUY Signal Blocked*\n\n"
-                            f"Symbol: {symbol}\n"
-                            f"Reason: Open position exists\n"
-                            f"RSI: {analysis['rsi']:.2f}\n"
-                            f"Price: {analysis['last_price']:.8f}"
-                        )
-                    except Exception as e:
-                        logger.error(f"Error sending open position warning: {str(e)}")
+                    # No Telegram notification for blocked signals (as requested)
+                    logger.debug(f"BUY signal blocked for {symbol} - open position exists")
             
             # Determine whether to update the sheet based on conditions
             should_update = False
@@ -1634,17 +1625,22 @@ class TradingBot:
             if should_update:
                 try:
                     # Update Google Sheet
+                    logger.info(f"🔄 ATTEMPTING SHEET UPDATE for {symbol} (action: {analysis['action']}) at row {row_index}")
                     updated = self.sheets.update_analysis(row_index, analysis)
                     
                     if updated:
                         # Update the last update time for this coin
                         self._last_update_times[symbol] = current_time
+                        logger.info(f"✅ SHEET UPDATE SUCCESS for {symbol}")
                         
                         # Send notification only for BUY signals (as required) when action changes
                         if analysis["action"] == "BUY" and prev_action != "BUY":
+                            logger.info(f"📢 SENDING TELEGRAM BUY SIGNAL for {symbol}")
                             self.telegram.send_signal(analysis)
+                        else:
+                            logger.debug(f"No Telegram notification needed for {symbol} (action: {analysis['action']}, prev: {prev_action})")
                     else:
-                        logger.warning(f"Failed to update sheet for {symbol}")
+                        logger.error(f"❌ SHEET UPDATE FAILED for {symbol}")
                         # Track failure for back-off mechanism
                         if symbol in self._failed_updates:
                             _, fail_count = self._failed_updates[symbol]
