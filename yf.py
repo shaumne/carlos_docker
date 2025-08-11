@@ -1423,7 +1423,7 @@ class TelegramNotifier:
     def send_startup_message(self):
         """Send a message when the bot starts up"""
         coins = self.get_tracked_coins_count()
-        update_interval = int(os.getenv("UPDATE_INTERVAL", "5"))
+        update_interval = int(clean_env_value("UPDATE_INTERVAL", "5"))
         
         message = f"*Crypto Trading Bot Started*\n\n"
         message += f"• Number of tracked coins: {coins}\n"
@@ -1522,8 +1522,8 @@ class TradingBot:
         self.data_provider = TradingViewDataProvider()
         self.sheets = GoogleSheetIntegration()
         # Read update interval from .env file with default of 5 seconds
-        self.update_interval = int(os.getenv("TRADE_CHECK_INTERVAL", "5"))
-        self.batch_size = int(os.getenv("BATCH_SIZE", "5"))  # Process in batches
+        self.update_interval = int(clean_env_value("TRADE_CHECK_INTERVAL", "5"))
+        self.batch_size = int(clean_env_value("BATCH_SIZE", "5"))  # Process in batches
         self.telegram = TelegramNotifier()
         self.analyzed_pairs = {}  # Store the latest analysis for all pairs
         self._previous_actions = {}  # Store previous actions for comparison

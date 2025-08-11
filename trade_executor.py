@@ -917,7 +917,7 @@ class GoogleSheetTradeManager:
         self.local_manager = LocalSheetManager()
         # Expose DB for positions/state persistence
         self.db = self.local_manager.db
-        self.batch_update_interval = int(os.getenv("BATCH_UPDATE_INTERVAL", "60"))  # Default 60 seconds
+        self.batch_update_interval = int(clean_env_value("BATCH_UPDATE_INTERVAL", "60"))  # Default 60 seconds
         self.last_batch_update = 0
         self.rate_limit_wait_time = 60  # Wait time when rate limited
 
