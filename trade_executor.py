@@ -1357,17 +1357,22 @@ class GoogleSheetTradeManager:
             # Find rows with actionable signals in 'Buy Signal' column
             trade_signals = []
             for idx, row in enumerate(all_records):
-                # Check if TRADE is YES
-                trade_value = row.get('TRADE', '').upper()
+                # Normalize flags (support numbers/bools/strings)
+                trade_raw = row.get('TRADE', '')
+                trade_value = str(trade_raw).strip().upper() if trade_raw is not None else ''
                 is_active = trade_value in ['YES', 'Y', 'TRUE', '1']
-                buy_signal = row.get('Buy Signal', '').upper()
-                
-                # Check if Tradable is YES - if column exists, default to YES if not found
-                tradable_value = row.get('Tradable', 'YES').upper()
+
+                buy_signal_raw = row.get('Buy Signal', '')
+                buy_signal = str(buy_signal_raw).strip().upper() if buy_signal_raw is not None else ''
+
+                # Check if Tradable is YES - default YES if not found
+                tradable_raw = row.get('Tradable', 'YES')
+                tradable_value = str(tradable_raw).strip().upper() if tradable_raw is not None else 'YES'
                 tradable = tradable_value in ['YES', 'Y', 'TRUE', '1']
                 
                 # Get symbol first before logging
-                symbol = row.get('Coin', '')
+                sym_raw = row.get('Coin', '')
+                symbol = str(sym_raw).strip() if sym_raw is not None else ''
                 if not symbol:
                     continue
                 
