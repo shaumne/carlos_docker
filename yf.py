@@ -920,7 +920,10 @@ class GoogleSheetIntegration:
             "ma50": str(data["ma50"]),
             "ema10": str(data["ema10"]),
             "ma50_valid": "YES" if data["ma50_valid"] else "NO",
-            "ema10_valid": "YES" if data["ema10_valid"] else "NO"
+            "ema10_valid": "YES" if data["ema10_valid"] else "NO",
+            # Include volume metrics for accurate change detection
+            "volume": str(data.get("volume", 0)),
+            "volume_ratio": str(data.get("volume_ratio", 0))
         }
         
         # Also check take profit and stop loss if action is BUY
@@ -1260,6 +1263,12 @@ class TelegramNotifier:
         self.message_sender_thread = None
         self.bot_initialized = False
         self.last_daily_summary = None
+        # Dedup memory for repeated BUY signals
+        self._last_signal_ts = {}
+        try:
+            self._dedup_window_sec = int(clean_env_value("TELEGRAM_DEDUP_WINDOW", "600"))
+        except Exception:
+            self._dedup_window_sec = 600
         
         # Start message sender thread if credentials are available
         if self.token and self.chat_id:
@@ -1407,6 +1416,12 @@ class TelegramNotifier:
         
         # Use original symbol name if available
         display_symbol = data.get("original_symbol", data["symbol"])
+        # Deduplicate: skip if signaled recently
+        now_ts = time.time()
+        last_ts = self._last_signal_ts.get(display_symbol)
+        if last_ts and (now_ts - last_ts) < self._dedup_window_sec:
+            logger.debug(f"Skipping duplicate BUY signal for {display_symbol}")
+            return True
         
         message = f"*{data['action']} SIGNAL: {display_symbol}*\n\n"
         message += f"• Price: {data['last_price']:.8f}\n"
@@ -1450,8 +1465,10 @@ class TelegramNotifier:
         message += f"• EMA10: {'YES' if data['ema10_valid'] else 'NO'}\n"
         
         message += f"\nTimestamp: {data['timestamp']}"
-        
-        return self.send_message(message)
+        sent = self.send_message(message)
+        if sent:
+            self._last_signal_ts[display_symbol] = now_ts
+        return sent
         
     def send_startup_message(self):
         """Send a message when the bot starts up"""

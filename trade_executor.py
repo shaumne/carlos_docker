@@ -127,96 +127,50 @@ class TelegramNotifier:
     def __init__(self):
         self.bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
         self.chat_id = os.getenv("TELEGRAM_CHAT_ID")
-        self.bot = None
-        self.loop = None
-        
-        if self.bot_token and self.chat_id:
-            try:
-                self.bot = telegram.Bot(token=self.bot_token)
-                # Create a new event loop
-                self.loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(self.loop)
-                logger.info(f"Telegram bot initialized successfully with chat_id: {self.chat_id}")
-                # Test message
-                self.send_message("🤖 Trading Bot Started - Telegram notifications are active")
-            except Exception as e:
-                logger.error(f"Failed to initialize Telegram bot: {str(e)}")
-        else:
+        if not self.bot_token or not self.chat_id:
             logger.error("Telegram configuration missing! Please check TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID environment variables")
-            if not self.bot_token:
-                logger.error("TELEGRAM_BOT_TOKEN is not set")
-            if not self.chat_id:
-                logger.error("TELEGRAM_CHAT_ID is not set")
-    
-    async def send_message_async(self, message):
-        if not self.bot or not self.chat_id:
-            logger.warning("Telegram bot not configured, skipping notification")
-            return False
-            
+        else:
+            logger.info(f"Telegram initialized for chat {self.chat_id}")
+
+    def _send_telegram_message_http(self, text: str, parse_mode: str = "HTML") -> bool:
         try:
-            # Configure connection pool
-            connector = aiohttp.TCPConnector(limit=1, ttl_dns_cache=300)
-            async with aiohttp.ClientSession(connector=connector) as session:
-                self.bot._session = session
-                await self.bot.send_message(chat_id=self.chat_id, text=message, parse_mode='HTML')
-                logger.debug(f"Telegram message sent successfully: {message[:50]}...")
+            url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+            data = {
+                "chat_id": self.chat_id,
+                "text": text,
+                "parse_mode": parse_mode,
+                "disable_web_page_preview": True,
+            }
+            resp = requests.post(url, data=data, timeout=15)
+            if resp.status_code == 200:
                 return True
+            # Retry without parse mode if formatting error
+            if resp.status_code == 400 and "can't parse entities" in resp.text.lower():
+                data.pop("parse_mode", None)
+                resp2 = requests.post(url, data=data, timeout=15)
+                return resp2.status_code == 200
+            logger.error(f"Telegram HTTP error {resp.status_code}: {resp.text}")
+            return False
         except Exception as e:
-            logger.error(f"Failed to send Telegram message async: {str(e)}")
-            if hasattr(self, 'bot_token') and self.bot_token:
-                logger.error(f"Bot token: {self.bot_token[:5]}...")
-            logger.error(f"Chat ID: {self.chat_id}")
+            logger.error(f"Telegram HTTP exception: {e}")
             return False
-    
-    def send_message(self, message):
-        if not self.bot or not self.chat_id:
-            logger.warning("Telegram bot not configured, skipping notification")
+
+    def send_message(self, message: str) -> bool:
+        if not self.bot_token or not self.chat_id:
             return False
-        
-        # Filter out rate limit and API error messages to avoid spam
-        if any(keyword in message.lower() for keyword in ['rate limit', 'quota exceeded', 'api error', '429', 'too many requests']):
-            logger.info("Skipping Telegram notification for rate limit/API error message")
-            return True  # Return True for filtered messages
-        
-        # Filter out blocked signal messages (but allow important messages)
-        if (any(blocked_term in message.lower() for blocked_term in ['signal blocked', 'buy signal blocked', 'open position exists']) 
-            and not any(important_term in message.lower() for important_term in ['bot started', 'order executed', 'buy order', 'sell order'])):
-            logger.debug(f"Filtered blocked signal message: {message[:50]}...")
-            return True  # Return True to prevent retries
-            
-        try:
-            # Check if we have a running event loop
-            try:
-                current_loop = asyncio.get_running_loop()
-                # If we're already in a loop, create a task
-                if current_loop:
-                    # Use asyncio.run_coroutine_threadsafe for thread safety
-                    import concurrent.futures
-                    future = asyncio.run_coroutine_threadsafe(self.send_message_async(message), current_loop)
-                    result = future.result(timeout=10)  # 10 second timeout
-                    return result
-            except RuntimeError:
-                # No running loop, proceed with our own loop
-                pass
-            
-            if self.loop and not self.loop.is_closed():
-                result = self.loop.run_until_complete(self.send_message_async(message))
-            else:
-                # Create new loop if current one is closed
-                self.loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(self.loop)
-                result = self.loop.run_until_complete(self.send_message_async(message))
-            
-            if result:
-                logger.info(f"✅ Telegram message sent successfully")
-                return True
-            else:
-                logger.error(f"❌ Telegram message sending returned False")
-                return False
-            
-        except Exception as e:
-            logger.error(f"Failed to send Telegram message: {str(e)}")
-            return False
+        # Filter spammy messages
+        lower = message.lower()
+        if any(k in lower for k in ["rate limit", "quota exceeded", "api error", "429", "too many requests"]):
+            return True
+        if (any(k in lower for k in ["signal blocked", "buy signal blocked", "open position exists"]) and
+            not any(k in lower for k in ["bot started", "order executed", "buy order", "sell order"])):
+            return True
+        ok = self._send_telegram_message_http(message)
+        if ok:
+            logger.info("✅ Telegram message sent successfully")
+        else:
+            logger.error("❌ Telegram message sending returned False")
+        return ok
 
 class CryptoExchangeAPI:
     """Class to handle Crypto.com Exchange API requests using the approaches from sui_trading_script"""
@@ -575,9 +529,9 @@ class CryptoExchangeAPI:
                     logger.error(f"No available balance found for {base_currency}")
                     return None
                 
-                # Convert to float and use 95% of available balance (to avoid precision issues)
+                # Convert to float and use 97% of available balance (to avoid precision issues and 306 errors)
                 available_balance = float(available_balance)
-                quantity = available_balance * 0.95
+                quantity = available_balance * 0.97
                 logger.info(f"Using 95% of available balance: {quantity} {base_currency}")
             else:
                 # If quantity is provided, convert to float
@@ -1360,8 +1314,23 @@ class GoogleSheetTradeManager:
     def get_trade_signals(self):
         """Get coins marked for trading from Google Sheet"""
         try:
-            # Get all records from the sheet
-            all_records = self.worksheet.get_all_records()
+            # Get all records from the sheet with basic backoff to avoid 429
+            max_attempts = 5
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    all_records = self.worksheet.get_all_records()
+                    break
+                except gspread.exceptions.APIError as e:
+                    status = getattr(getattr(e, 'response', None), 'status_code', None)
+                    if status in (429, 503):
+                        sleep_s = min(60, (1.7 ** attempt) + random.uniform(0, 0.5))
+                        logger.warning(f"RATE_LIMIT on get_all_records attempt={attempt}, sleeping {sleep_s:.2f}s")
+                        time.sleep(sleep_s)
+                        continue
+                    raise
+            else:
+                logger.error("Exceeded retries fetching sheet records")
+                return []
             
             if not all_records:
                 logger.error("No data found in the sheet")
@@ -2863,7 +2832,8 @@ class GoogleSheetTradeManager:
         A TradingViewDataProvider or similar module should be used here.
         """
         try:
-            from strategy import TradingViewDataProvider
+            # Use the local TradingView provider defined in yf.py
+            from yf import TradingViewDataProvider
             provider = TradingViewDataProvider()
             analysis = provider.get_analysis(symbol)
             if analysis:
