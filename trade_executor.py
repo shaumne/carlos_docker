@@ -1837,20 +1837,15 @@ class GoogleSheetTradeManager:
                 else:
                     logger.error(f"Failed to place TP order: {tp_response}")
                     
-                    # Farklı bir format dene - belki sadece LIMIT tipi çalışıyordur
-                    logger.info(f"Trying with LIMIT order type for TP")
-                    tp_params["type"] = "LIMIT"
-                    # ref_price parametrelerini kaldır
-                    if "ref_price" in tp_params:
-                        del tp_params["ref_price"]
-                    if "ref_price_type" in tp_params:
-                        del tp_params["ref_price_type"]
-                    
+                    # Daha güvenli fallback: TAKE_PROFIT_LIMIT tipini kullan
+                    logger.info(f"Trying with TAKE_PROFIT_LIMIT order type for TP")
+                    tp_params["type"] = "TAKE_PROFIT_LIMIT"
+                    # ref_price/ref_price_type tetikleyici olarak kalır
                     tp_retry_response = self.exchange_api.send_request("private/create-order", tp_params)
                     
                     if tp_retry_response and tp_retry_response.get("code") == 0:
                         tp_order_id = tp_retry_response["result"]["order_id"]
-                        logger.info(f"Successfully placed TP order with LIMIT type, order ID: {tp_order_id}")
+                        logger.info(f"Successfully placed TP order with TAKE_PROFIT_LIMIT type, order ID: {tp_order_id}")
                     
                 # Stop Loss için STOP_LOSS satış emri oluştur
                 sl_params = {
@@ -1870,21 +1865,13 @@ class GoogleSheetTradeManager:
                     logger.info(f"Successfully placed SL order for {symbol} at {stop_loss}, order ID: {sl_order_id}")
                 else:
                     logger.error(f"Failed to place SL order: {sl_response}")
-                    
-                    # Farklı bir format dene - belki sadece LIMIT tipi çalışıyordur
-                    logger.info(f"Trying with LIMIT order type for SL")
-                    sl_params["type"] = "LIMIT"
-                    # ref_price parametrelerini kaldır
-                    if "ref_price" in sl_params:
-                        del sl_params["ref_price"]
-                    if "ref_price_type" in sl_params:
-                        del sl_params["ref_price_type"]
-                    
+                    # Daha güvenli fallback: STOP_LIMIT tipini kullan (tetikleyici ile)
+                    logger.info("Trying with STOP_LIMIT order type for SL")
+                    sl_params["type"] = "STOP_LIMIT"
                     sl_retry_response = self.exchange_api.send_request("private/create-order", sl_params)
-                    
                     if sl_retry_response and sl_retry_response.get("code") == 0:
                         sl_order_id = sl_retry_response["result"]["order_id"]
-                        logger.info(f"Successfully placed SL order with LIMIT type, order ID: {sl_order_id}")
+                        logger.info(f"Successfully placed SL order with STOP_LIMIT type, order ID: {sl_order_id}")
                 
                 # TP ve SL order ID'lerini pozisyon takip bilgilerine kaydet
                 return tp_order_id, sl_order_id
@@ -2035,6 +2022,27 @@ class GoogleSheetTradeManager:
         
         # BUY signal processing
         if action == "BUY":
+            # Balance-based open position check: if base balance * market price > threshold, skip
+            try:
+                threshold = float(clean_env_value("OPEN_POSITION_USD_THRESHOLD", "20"))
+            except Exception:
+                threshold = 20.0
+            try:
+                base_coin = symbol.split('_')[0]
+                # Get base coin balance (free)
+                base_balance = self.exchange_api.get_coin_balance(base_coin)
+                base_free = float(base_balance) if base_balance else 0.0
+                # Get current market price in USDT for the symbol
+                current_px = self.exchange_api.get_current_price(symbol) or 0.0
+                usd_val = base_free * float(current_px)
+                if usd_val > threshold:
+                    logger.info(f"Skipping BUY for {symbol}: existing holdings value ${usd_val:.2f} > ${threshold:.2f}")
+                    # Avoid Telegram signal here by returning without placing order
+                    # Also mark in sheet that signal was skipped due to existing position
+                    self.local_manager.add_cell_update(row_index, 'Notes', f"Signal skipped: existing value ${usd_val:.2f} > ${threshold:.2f}")
+                    return False
+            except Exception as e:
+                logger.warning(f"Balance-value precheck failed for {symbol}: {e}")
             take_profit = float(trade_signal['take_profit'])
             stop_loss = float(trade_signal['stop_loss'])
             

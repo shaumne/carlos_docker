@@ -1586,6 +1586,24 @@ class TradingBot:
         self._retry_delay = 60  # Retry failed coins after 60 seconds
         self._force_sheet_refresh_interval = 600  # Force refresh trading pairs every 10 minutes
         self._last_force_refresh = time.time()
+        # Balance-based open position detection via ccxt (optional)
+        try:
+            self.position_value_threshold_usd = float(clean_env_value("OPEN_POSITION_USD_THRESHOLD", "20"))
+        except Exception:
+            self.position_value_threshold_usd = 20.0
+        self._ccxt_exchange = None
+        try:
+            api_key = os.getenv("CRYPTO_API_KEY")
+            api_secret = os.getenv("CRYPTO_API_SECRET")
+            if api_key and api_secret:
+                self._ccxt_exchange = ccxt.cryptocom({
+                    'apiKey': api_key,
+                    'secret': api_secret,
+                    'enableRateLimit': True,
+                })
+                logger.info("CCXT initialized for balance-based position checks")
+        except Exception as e:
+            logger.warning(f"CCXT init failed: {e}")
     
     def process_pair_and_get_analysis(self, pair_info):
         """Process a single trading pair and return the analysis results"""
@@ -1627,17 +1645,26 @@ class TradingBot:
             # Store in analyzed pairs for daily summary
             self.analyzed_pairs[symbol] = analysis
             
-            # AÇIK POZİSYON KONTROLÜ: Eğer sembol için açık pozisyon varsa, BUY sinyali üretme
+            # AÇIK POZİSYON KONTROLÜ: Bakiye*Fiyat USD değeri eşiği aşarsa sinyal engelle
             if analysis["action"] == "BUY":
-                has_open_position = self.sheets.has_open_position(symbol)
-                if has_open_position:
-                    logger.info(f"{symbol} için açık pozisyon bulundu, BUY sinyali engelleniyor")
-                    # BUY sinyalini WAIT olarak değiştir
+                blocked = False
+                try:
+                    usd_val = self._get_existing_position_usd_value(symbol)
+                    if usd_val is not None and usd_val > self.position_value_threshold_usd:
+                        blocked = True
+                        logger.info(f"Blocking BUY for {symbol}: position value ${usd_val:.2f} > ${self.position_value_threshold_usd:.2f}")
+                except Exception as _e:
+                    pass
+                if blocked:
                     analysis["action"] = "WAIT"
                     analysis["buy_signal"] = False
-                    
-                    # No Telegram notification for blocked signals (as requested)
-                    logger.debug(f"BUY signal blocked for {symbol} - open position exists")
+                else:
+                    has_open_position = self.sheets.has_open_position(symbol)
+                    if has_open_position:
+                        logger.info(f"{symbol} için açık pozisyon bulundu, BUY sinyali engelleniyor")
+                        analysis["action"] = "WAIT"
+                        analysis["buy_signal"] = False
+                        logger.debug(f"BUY signal blocked for {symbol} - open position exists")
             
             # Determine whether to update the sheet based on conditions
             should_update = False
@@ -1731,6 +1758,29 @@ class TradingBot:
             if fail_count > 3:
                 logger.warning(f"Symbol {symbol} has failed {fail_count} times in a row")
             
+            return None
+
+    def _get_existing_position_usd_value(self, symbol: str):
+        try:
+            if not self._ccxt_exchange:
+                return None
+            base = symbol.split('_')[0]
+            balances = self._ccxt_exchange.fetch_balance()
+            free_bal = 0.0
+            try:
+                free_bal = float((balances.get('free') or {}).get(base, 0) or 0)
+            except Exception:
+                free_bal = 0.0
+            if free_bal <= 0:
+                return 0.0
+            market = f"{base}/USDT"
+            ticker = self._ccxt_exchange.fetch_ticker(market)
+            price = float(ticker.get('last') or ticker.get('ask') or ticker.get('bid') or 0)
+            if price <= 0:
+                return None
+            return free_bal * price
+        except Exception as e:
+            logger.debug(f"_get_existing_position_usd_value error for {symbol}: {e}")
             return None
     
     def send_initial_analysis(self, analysis, pair_info):
