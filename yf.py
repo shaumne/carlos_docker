@@ -1258,7 +1258,9 @@ class TelegramNotifier:
     
     def __init__(self):
         self.token = os.getenv("TELEGRAM_BOT_TOKEN")
-        self.chat_id = os.getenv("TELEGRAM_CHAT_ID")
+        # Support multiple chat IDs via TELEGRAM_CHAT_ID (comma or newline-separated)
+        chat_ids_env = os.getenv("TELEGRAM_CHAT_ID", "")
+        self.chat_ids = [cid.strip() for part in chat_ids_env.split("\n") for cid in part.split(",") if cid.strip()]
         self.message_queue = Queue()
         self.message_sender_thread = None
         self.bot_initialized = False
@@ -1271,7 +1273,7 @@ class TelegramNotifier:
             self._dedup_window_sec = 600
         
         # Start message sender thread if credentials are available
-        if self.token and self.chat_id:
+        if self.token and self.chat_ids:
             logger.info(f"Initializing Telegram bot with token: {self.token[:4]}...{self.token[-4:]}")
             
             # Clear any pending messages from previous session
@@ -1286,8 +1288,8 @@ class TelegramNotifier:
         else:
             if not self.token:
                 logger.warning("Telegram bot token not found in environment variables")
-            if not self.chat_id:
-                logger.warning("Telegram chat ID not found in environment variables")
+            if not self.chat_ids:
+                logger.warning("Telegram chat ID(s) not found in environment variables")
     
     def _message_sender_worker(self):
         """Background thread worker that sends messages from the queue"""
@@ -1305,10 +1307,13 @@ class TelegramNotifier:
                         # Safe text handling
                         safe_text = self._sanitize_text(message_text)
                         
-                        # Send the message using direct HTTP request
-                        success = self._send_telegram_message_http(safe_text, parse_mode)
+                        # Send the message to all configured chat IDs
+                        overall_success = True
+                        for chat_id in self.chat_ids:
+                            success = self._send_telegram_message_http(safe_text, parse_mode, chat_id=chat_id)
+                            overall_success = overall_success and bool(success)
                         
-                        if success:
+                        if overall_success:
                             logger.info(f"Sent Telegram message: {safe_text[:50]}...")
                         else:
                             logger.error("Failed to send Telegram message")
@@ -1336,7 +1341,7 @@ class TelegramNotifier:
             safe_text = safe_text.replace(original, replacement)
         return safe_text
     
-    def _send_telegram_message_http(self, text, parse_mode=None):
+    def _send_telegram_message_http(self, text, parse_mode=None, chat_id=None):
         """Send a message using direct HTTP request to Telegram API"""
         try:
             # Telegram Bot API endpoint for sending messages
@@ -1344,7 +1349,7 @@ class TelegramNotifier:
             
             # Prepare request data
             data = {
-                "chat_id": self.chat_id,
+                "chat_id": chat_id,
                 "text": text
             }
             
@@ -1377,7 +1382,7 @@ class TelegramNotifier:
     
     def send_message(self, message, parse_mode="Markdown"):
         """Queue a message to be sent to Telegram"""
-        if not self.token or not self.chat_id:
+        if not self.token or not self.chat_ids:
             logger.warning("Telegram not configured, skipping message")
             return False
         

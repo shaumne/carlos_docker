@@ -126,17 +126,19 @@ class LocalSheetManager:
 class TelegramNotifier:
     def __init__(self):
         self.bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-        self.chat_id = os.getenv("TELEGRAM_CHAT_ID")
-        if not self.bot_token or not self.chat_id:
+        # Support multiple chat IDs via TELEGRAM_CHAT_ID (comma or newline-separated)
+        chat_ids_env = os.getenv("TELEGRAM_CHAT_ID", "")
+        self.chat_ids = [cid.strip() for part in chat_ids_env.split("\n") for cid in part.split(",") if cid.strip()]
+        if not self.bot_token or not self.chat_ids:
             logger.error("Telegram configuration missing! Please check TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID environment variables")
         else:
-            logger.info(f"Telegram initialized for chat {self.chat_id}")
+            logger.info(f"Telegram initialized for chats: {', '.join(self.chat_ids)}")
 
-    def _send_telegram_message_http(self, text: str, parse_mode: str = "HTML") -> bool:
+    def _send_telegram_message_http(self, text: str, parse_mode: str = "HTML", chat_id: str = None) -> bool:
         try:
             url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
             data = {
-                "chat_id": self.chat_id,
+                "chat_id": chat_id,
                 "text": text,
                 "parse_mode": parse_mode,
                 "disable_web_page_preview": True,
@@ -156,7 +158,7 @@ class TelegramNotifier:
             return False
 
     def send_message(self, message: str) -> bool:
-        if not self.bot_token or not self.chat_id:
+        if not self.bot_token or not self.chat_ids:
             return False
         # Filter spammy messages
         lower = message.lower()
@@ -165,12 +167,14 @@ class TelegramNotifier:
         if (any(k in lower for k in ["signal blocked", "buy signal blocked", "open position exists"]) and
             not any(k in lower for k in ["bot started", "order executed", "buy order", "sell order"])):
             return True
-        ok = self._send_telegram_message_http(message)
+        # Only send to the FIRST chat for order execution notifications
+        first_chat = self.chat_ids[0]
+        ok = self._send_telegram_message_http(message, chat_id=first_chat)
         if ok:
-            logger.info("✅ Telegram message sent successfully")
+            logger.info("✅ Telegram message sent successfully to primary chat")
         else:
-            logger.error("❌ Telegram message sending returned False")
-        return ok
+            logger.error("❌ Telegram message sending failed to primary chat")
+        return bool(ok)
 
 class CryptoExchangeAPI:
     """Class to handle Crypto.com Exchange API requests using the approaches from sui_trading_script"""
