@@ -1653,23 +1653,30 @@ class TradingBot:
             # AÇIK POZİSYON KONTROLÜ: Bakiye*Fiyat USD değeri eşiği aşarsa sinyal engelle
             if analysis["action"] == "BUY":
                 blocked = False
+                block_reason = ""
                 try:
                     usd_val = self._get_existing_position_usd_value(symbol)
+                    logger.debug(f"Position USD value check for {symbol}: ${usd_val}")
                     if usd_val is not None and usd_val > self.position_value_threshold_usd:
                         blocked = True
-                        logger.info(f"Blocking BUY for {symbol}: position value ${usd_val:.2f} > ${self.position_value_threshold_usd:.2f}")
+                        block_reason = f"position value ${usd_val:.2f} > ${self.position_value_threshold_usd:.2f}"
+                        logger.info(f"Blocking BUY for {symbol}: {block_reason}")
                 except Exception as _e:
-                    pass
+                    logger.warning(f"USD value check failed for {symbol}: {_e}")
+                
+                if not blocked:
+                    has_open_position = self.sheets.has_open_position(symbol)
+                    if has_open_position:
+                        blocked = True
+                        block_reason = "sheet shows open position"
+                        logger.info(f"{symbol} için açık pozisyon bulundu, BUY sinyali engelleniyor")
+                
                 if blocked:
                     analysis["action"] = "WAIT"
                     analysis["buy_signal"] = False
-                else:
-                    has_open_position = self.sheets.has_open_position(symbol)
-                    if has_open_position:
-                        logger.info(f"{symbol} için açık pozisyon bulundu, BUY sinyali engelleniyor")
-                        analysis["action"] = "WAIT"
-                        analysis["buy_signal"] = False
-                        logger.debug(f"BUY signal blocked for {symbol} - open position exists")
+                    logger.debug(f"BUY signal blocked for {symbol} - {block_reason}")
+                    # Pozisyon varken hiçbir güncelleme yapmadan çık, tekrar sinyal üretmesin
+                    return analysis
             
             # Determine whether to update the sheet based on conditions
             should_update = False
@@ -1766,26 +1773,43 @@ class TradingBot:
             return None
 
     def _get_existing_position_usd_value(self, symbol: str):
+        """
+        Get USD value of existing holdings for a symbol using Crypto.com Exchange API
+        Same method as trade_executor.py to maintain consistency for signal control
+        """
         try:
-            if not self._ccxt_exchange:
-                return None
-            base = symbol.split('_')[0]
-            balances = self._ccxt_exchange.fetch_balance()
-            free_bal = 0.0
-            try:
-                free_bal = float((balances.get('free') or {}).get(base, 0) or 0)
-            except Exception:
-                free_bal = 0.0
-            if free_bal <= 0:
+            from trade_executor import CryptoExchangeAPI
+            
+            # Get base currency from symbol (e.g., ADA from ADA_USDT)
+            base_currency = symbol.split('_')[0]
+            
+            # Initialize exchange API (same as trade_executor.py)
+            exchange_api = CryptoExchangeAPI()
+            
+            # Get balance for base currency
+            balance_str = exchange_api.get_coin_balance(base_currency)
+            if not balance_str:
+                logger.debug(f"No balance found for {base_currency}")
                 return 0.0
-            market = f"{base}/USDT"
-            ticker = self._ccxt_exchange.fetch_ticker(market)
-            price = float(ticker.get('last') or ticker.get('ask') or ticker.get('bid') or 0)
-            if price <= 0:
+                
+            base_free = float(balance_str)
+            if base_free <= 0:
+                return 0.0
+            
+            # Get current price using exchange API
+            current_price = exchange_api.get_current_price(symbol)
+            if not current_price:
+                logger.warning(f"Could not get current price for {symbol}")
                 return None
-            return free_bal * price
+            
+            # Calculate USD value
+            usd_value = base_free * current_price
+            
+            logger.debug(f"Position value for {base_currency}: {base_free} * {current_price} = ${usd_value:.2f}")
+            return usd_value
+            
         except Exception as e:
-            logger.debug(f"_get_existing_position_usd_value error for {symbol}: {e}")
+            logger.error(f"Error getting position USD value via Exchange API: {e}")
             return None
     
     def send_initial_analysis(self, analysis, pair_info):
